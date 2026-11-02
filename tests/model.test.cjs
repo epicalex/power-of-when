@@ -124,6 +124,11 @@ test('the peak example balances demand using other supply plus peaker output', (
   });
   assert.ok(rows.some(r => r.peaker === 0));
   assert.ok(rows.some(r => r.peaker > 150));
+  const at = t => rows.find(r => r.t === t);
+  assert.ok(at(12).demand > at(24).demand);
+  assert.ok(at(27).demand < at(24).demand);
+  close(at(18.5).demand, 470);
+  close(at(18.5).peaker, 170);
 });
 test('staged on-ramps change both requested profile and cohort eligibility', () => {
   const immediate = M.simulate({ dispatch: 'all', duration: 4, onramp: 0 });
@@ -171,4 +176,155 @@ test('solar reduces both net-demand curves equally and provides no invented even
     if (row.t >= 24 && row.t <= 30) close(row.generation, 0);
   });
   assert.ok(r.rows.some(row => row.generation > 0));
+});
+
+test('combined household chart preserves charging energy and reconciles total demand', () => {
+  for (const weather of ['windy','sunny','cloudy','still','overnight','changeable']) {
+    for (const start of [12,18,24,29]) {
+      const r = M.householdShift(start,31,weather);
+      close(r.plan.delivered,14);
+      close(r.rows.reduce((s,p)=>s+(p.total-p.home)*M.DT,0),14);
+      close(r.beyond,r.rows.reduce((s,p)=>s+Math.max(0,p.total-p.generation)*M.DT,0));
+      assert.ok(r.rows.every(p=>p.total>=p.home && p.generation>=0 && p.total<=10 && p.generation<=10));
+      const original=M.householdShift(18,31,weather);
+      close(r.rows.reduce((s,p)=>s+p.total*M.DT,0),original.rows.reduce((s,p)=>s+p.total*M.DT,0));
+    }
+  }
+});
+test('weather changes the useful charging time without inventing solar at night', () => {
+  const daytime=M.householdShift(12,31,'sunny'),night=M.householdShift(24,31,'sunny');
+  assert.ok(daytime.beyond<night.beyond);
+  const evening=M.householdShift(18,31,'overnight'),overnight=M.householdShift(25,31,'overnight');
+  assert.ok(overnight.beyond<evening.beyond);
+  assert.ok(daytime.rows.filter(p=>p.t%24>=18 || p.t%24<=6).every(p=>p.solar<1e-9));
+  assert.ok(night.peak<night.baselinePeak);
+});
+
+test('spreading household charging preserves energy and respects power and deadlines', () => {
+  for (const duration of [2,2.25,4,6,8,12]) {
+    for (const departure of [29,31,34]) {
+      const start=departure-duration;
+      const r=M.householdShift(start,departure,'overnight',duration);
+      close(r.plan.delivered,14);
+      close(r.rows.reduce((sum,p)=>sum+p.charging*M.DT,0),14);
+      close(r.power,14/duration);
+      assert.ok(r.rows.every(p=>p.charging<=7+1e-9 && (p.t<departure || p.charging===0)));
+      close(r.end,departure);
+      close(r.baselineBeyond,M.householdShift(18,departure,'overnight',2).baselineBeyond);
+    }
+  }
+});
+test('a gentler charge can fit beneath available renewables while preserving the journey', () => {
+  const fast=M.householdShift(24,31,'overnight',2);
+  const gentle=M.householdShift(24,31,'overnight',6);
+  close(fast.plan.delivered,gentle.plan.delivered);
+  assert.ok(fast.beyond>gentle.beyond);
+  assert.ok(gentle.rows.filter(p=>p.charging>0).every(p=>p.total<=p.generation));
+  close(gentle.beyond,gentle.rows.reduce((sum,p)=>sum+Math.max(0,p.home-p.generation)*M.DT,0));
+  const scarce=M.householdShift(24,31,'still',6);
+  assert.ok(scarce.beyond>0,'longer charging must not invent renewable supply');
+});
+
+test('illustrative tariff uses exact peak and off-peak boundaries', () => {
+  for(const [t,rate] of [[0,.1],[5.75,.1],[6,.25],[15.75,.25],[16,.35],[20.75,.35],[21,.25],[23.75,.25],[24,.1],[30,.25],[36,.25]]) close(M.illustrativeRate(t),rate);
+});
+test('time-of-use costs integrate each interval and keep the original comparison fixed', () => {
+  const original=M.householdShift(18,31,'windy',2);
+  close(original.chargingCost,4.9);close(original.baselineChargingCost,4.9);
+  const overnight=M.householdShift(24,31,'overnight',6);
+  close(overnight.chargingCost,1.4);
+  const crossing=M.householdShift(18,31,'still',12);
+  close(crossing.chargingCost,2.8);
+  for(const r of [original,overnight,crossing]) {
+    close(r.householdCost,r.rows.reduce((sum,p)=>sum+p.total*p.rate*M.DT,0));
+    close(r.householdCost-r.baselineHouseholdCost,r.chargingCost-r.baselineChargingCost);
+    close(r.baselineChargingCost,4.9);
+  }
+  close(M.householdShift(24,31,'sunny',6).chargingCost,overnight.chargingCost);
+});
+
+test('neighbourhood charging compares identical cars and energy needs', () => {
+  const f=M.neighbourhoodCharging();
+  for(const r of Object.values(f.results)){
+    close(r.energy,f.required);close(r.shortfall,0);assert.equal(r.ready,f.evCount);
+    r.plans.forEach((plan,i)=>{
+      close(plan.reduce((sum,p)=>sum+p*M.DT,0),f.cars[i].energy);
+      assert.ok(plan.every((p,k)=>p>=0 && p<=7+1e-6 && (p===0 || M.hours[k]>=f.cars[i].arrival && M.hours[k]<f.cars[i].departure)));
+    });
+    for(let k=0;k<M.STEPS;k++)close(r.total[k],f.base[k]+r.plans.reduce((sum,plan)=>sum+plan[k],0));
+    close(r.cost,r.plans.reduce((sum,plan)=>sum+plan.reduce((v,p,k)=>v+p*M.DT*M.illustrativeRate(M.hours[k]),0),0));
+  }
+  assert.ok(f.results.midnight.peak>f.results.arrival.peak);
+  assert.ok(f.results.coordinated.peak<=f.limit+1e-6);
+  close(f.results.midnight.cost,f.results.coordinated.cost);
+});
+test('coordination respects availability and spare capacity across fleet sizes', () => {
+  for(const homes of [20,60,80])for(const evShare of [25,70,100])for(const limit of [30,100,200]){
+    const f=M.neighbourhoodCharging({homes,evShare,limit}),r=f.results.coordinated;
+    r.total.forEach((total,k)=>assert.ok(total<=Math.max(limit,f.base[k])+1e-6));
+    close(r.energy+r.shortfall,f.required);
+    r.plans.forEach((plan,i)=>assert.ok(plan.every((p,k)=>p<=7+1e-6 && p>=0 && (p===0 || M.hours[k]>=f.cars[i].arrival && M.hours[k]<f.cars[i].departure))));
+  }
+  const f=M.neighbourhoodCharging({homes:80,evShare:100,limit:30});
+  assert.ok(f.results.coordinated.shortfall>0);
+  assert.ok(f.results.coordinated.ready<f.evCount);
+  assert.ok(f.results.coordinated.overloadHours>0,'base household demand can itself exceed a very low limit');
+});
+
+test('household objective buttons expose the cost versus renewables trade-off', () => {
+  for(const departure of [29,34])for(const weather of ['sunny','overnight','still']) {
+    const cheap=M.bestHouseholdSchedule(departure,weather,'cost');
+    const renewable=M.bestHouseholdSchedule(departure,weather,'renewables');
+    for(const best of [cheap,renewable]){
+      assert.ok(best.start>=12 && best.start+best.duration<=departure+1e-6);
+      assert.ok(best.duration>=2 && best.duration<=12);
+      close(best.result.plan.delivered,14);
+    }
+    close(cheap.result.chargingCost,1.4);
+    assert.ok(renewable.result.beyond<=cheap.result.beyond+1e-6);
+    assert.ok(cheap.result.chargingCost<=renewable.result.chargingCost+1e-6);
+    for(const start of [12,18,24])for(const duration of [2,4])if(start+duration<=departure){
+      const candidate=M.householdShift(start,departure,weather,duration);
+      assert.ok(cheap.result.chargingCost<=candidate.chargingCost+1e-6);
+      assert.ok(renewable.result.beyond<=candidate.beyond+1e-6);
+    }
+  }
+  const a=M.bestHouseholdSchedule(31,'sunny','cost'),b=M.bestHouseholdSchedule(31,'sunny','renewables');
+  assert.ok(a.result.chargingCost<b.result.chargingCost);
+  assert.ok(a.result.beyond>b.result.beyond);
+});
+
+test('EV renewable matching counts only simultaneous supply left after household use', () => {
+  for(const weather of ['windy','sunny','still','overnight'])for(const start of [12,18,21.5,24])for(const duration of [2,6])if(start+duration<=31){
+    const r=M.householdShift(start,31,weather,duration);
+    close(r.renewableMatched,r.rows.reduce((sum,p)=>sum+Math.min(p.charging,Math.max(0,p.generation-p.home))*M.DT,0));
+    close(r.renewableShare,r.renewableMatched/14*100);
+    assert.ok(r.renewableShare>=0 && r.renewableShare<=100+1e-6);
+    const homeGap=r.rows.reduce((sum,p)=>sum+Math.max(0,p.home-p.generation)*M.DT,0);
+    close(r.beyond-homeGap,14-r.renewableMatched);
+  }
+  const screenshot=M.householdShift(21.5,31,'windy',2);
+  assert.ok(screenshot.renewableShare<30,'a small improvement must not meet the 90% target');
+  const cheap=M.bestHouseholdSchedule(31,'sunny','cost').result;
+  const renewable=M.bestHouseholdSchedule(31,'sunny','renewables').result;
+  close(cheap.renewableShare,0);close(renewable.renewableShare,100);
+  assert.ok((1-cheap.chargingCost/cheap.baselineChargingCost)*100>=30);
+  assert.ok((1-renewable.chargingCost/renewable.baselineChargingCost)*100<30);
+});
+
+test('demand turn-up uses more solar without adding EV energy', () => {
+  const initial=M.renewableAbundance(0),full=M.renewableAbundance(100);
+  let previous=initial;
+  for(let share=0;share<=100;share+=10){
+    const r=M.renewableAbundance(share);
+    close(r.chargingEnergy,140);
+    close(r.rows.reduce((sum,p)=>sum+p.demand*M.DT,0),initial.rows.reduce((sum,p)=>sum+p.demand*M.DT,0));
+    close(r.used+r.unused,r.rows.reduce((sum,p)=>sum+p.generation*M.DT,0));
+    close(initial.unused-r.unused,r.extraUsed);
+    assert.ok(r.extraUsed>=previous.extraUsed-1e-6);
+    assert.ok(r.eveningPeak<=previous.eveningPeak+1e-6);
+    assert.ok(r.rows.every(p=>p.used>=0 && p.unused>=0 && p.used<=p.demand+1e-6 && p.used<=p.generation+1e-6));
+    assert.equal(r.movedCars,share/10);previous=r;
+  }
+  close(full.extraUsed,140);close(initial.eveningPeak-full.eveningPeak,70);
 });

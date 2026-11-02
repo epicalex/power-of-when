@@ -22,6 +22,99 @@
     if (weather === 'still') return 0.12 + 0.35 * sun;
     return 0.7 + 0.15 * Math.sin(t * 0.5) + 0.65 * sun;
   }
+  // Invented time-of-use tariff, GBP/kWh. No standing charge or export credit.
+  function illustrativeRate(t) {
+    const h = ((t % 24) + 24) % 24;
+    return h < 6 ? 0.10 : h >= 16 && h < 21 ? 0.35 : 0.25;
+  }
+  function householdShift(start, departure, weather = 'windy', duration = 2) {
+    duration = clamp(duration, 2, 12);
+    const power = 14 / duration;
+    const plan = evPlan(start, Math.min(start + duration, departure), 14, power);
+    const original = evPlan(18, departure);
+    const rows = hours.map((t, i) => {
+      const h = t % 24;
+      const sun = Math.max(0, Math.sin((h - 6) / 12 * Math.PI));
+      const home = 0.4 + 0.7 * Math.exp(-Math.pow((t - 18.5) / 2, 2)) + 0.45 * Math.exp(-Math.pow((t - 31) / 1.5, 2));
+      let wind = 2.8 + 0.6 * Math.sin(t * 0.5), solar = 2.5 * sun;
+      if (weather === 'sunny') { wind = 0.35; solar = 6.6 * sun; }
+      if (weather === 'still') { wind = 0.2; solar = 0.8 * sun; }
+      if (weather === 'cloudy') { wind = 3; solar = 0.7 * sun; }
+      if (weather === 'overnight') { wind = 0.8 + 6 * Math.exp(-Math.pow((t - 27) / 3.5, 2)); solar = 1.4 * sun; }
+      if (weather === 'changeable') { wind = 2.6 + 2.2 * Math.sin((t - 12) * 0.75); solar = 3.2 * sun * (0.65 + 0.35 * Math.cos(t * 2)); }
+      const generation = wind + solar, total = home + plan.power[i], baseline = home + original.power[i];
+      return { t, home, charging: plan.power[i], total, baseline, wind, solar, generation, rate: illustrativeRate(t) };
+    });
+    const renewableMatched = sum(rows.map(r => Math.min(r.charging, Math.max(0, r.generation-r.home)))) * DT;
+    const baselineRenewableMatched = sum(rows.map((r,i) => Math.min(original.power[i], Math.max(0, r.generation-r.home)))) * DT;
+    return { rows, plan, duration, power, renewableMatched, baselineRenewableMatched,
+      renewableShare: renewableMatched / 14 * 100, baselineRenewableShare: baselineRenewableMatched / 14 * 100,
+      chargingCost: sum(rows.map(r => r.charging * r.rate)) * DT,
+      baselineChargingCost: sum(rows.map((r, i) => original.power[i] * r.rate)) * DT,
+      householdCost: sum(rows.map(r => r.total * r.rate)) * DT,
+      baselineHouseholdCost: sum(rows.map(r => r.baseline * r.rate)) * DT,
+      end: Math.min(start + duration, departure), peak: Math.max(...rows.map(r => r.total)), baselinePeak: Math.max(...rows.map(r => r.baseline)),
+      beyond: sum(rows.map(r => Math.max(0, r.total - r.generation))) * DT,
+      baselineBeyond: sum(rows.map(r => Math.max(0, r.baseline - r.generation))) * DT };
+  }
+  function bestHouseholdSchedule(departure, weather, objective = 'cost') {
+    let best;
+    for(let duration=2;duration<=12;duration+=DT) {
+      for(let start=12;start+duration<=departure+1e-8;start+=DT) {
+        const result=householdShift(start,departure,weather,duration);
+        const primary=objective==='renewables'?result.beyond:result.chargingCost;
+        const secondary=objective==='renewables'?result.chargingCost:result.beyond;
+        if(!best || primary<best.primary-1e-8 || Math.abs(primary-best.primary)<1e-8 && secondary<best.secondary-1e-8)best={start,duration,primary,secondary,result};
+      }
+    }
+    return best;
+  }
+  function renewableAbundance(shiftPercent = 0) {
+    const share=clamp(shiftPercent,0,100)/100;
+    const rows=Array.from({length:72},(_,i)=>6+i*DT).map(t=>{
+      const home=25+45*Math.exp(-Math.pow((t-18.5)/2,2));
+      const generation=130*Math.max(0,Math.sin((t%24-6)/12*Math.PI));
+      const evening=t>=18 && t<20,daytime=t>=12 && t<14;
+      const baseline=home+(evening?70:0);
+      const charging=(evening?70*(1-share):0)+(daytime?70*share:0);
+      const demand=home+charging;
+      return {t,home,generation,baseline,charging,demand,used:Math.min(demand,generation),unused:Math.max(0,generation-demand)};
+    });
+    const used=sum(rows.map(r=>r.used))*DT;
+    const baselineUsed=sum(rows.map(r=>Math.min(r.baseline,r.generation)))*DT;
+    return {rows,shiftPercent:share*100,movedCars:Math.round(share*10),chargingEnergy:sum(rows.map(r=>r.charging))*DT,
+      used,extraUsed:used-baselineUsed,unused:sum(rows.map(r=>r.unused))*DT,
+      eveningPeak:Math.max(...rows.filter(r=>r.t>=18 && r.t<21).map(r=>r.demand))};
+  }
+  function neighbourhoodCharging(options = {}) {
+    const homes = Math.round(clamp(options.homes ?? 60,20,80));
+    const evCount = Math.round(homes * clamp(options.evShare ?? 70,25,100) / 100);
+    const limit = clamp(options.limit ?? 140,30,200);
+    const base = hours.map(t => homes * (0.45 + 0.75 * Math.exp(-Math.pow((t-18.5)/2,2)) + 0.4 * Math.exp(-Math.pow((t-31)/1.5,2))));
+    const cars = Array.from({length:evCount},(_,i)=>({arrival:16+(i%9)*0.5,departure:29+(i%9)*0.5,energy:7+(i%4)*3.5}));
+    function schedule(mode) {
+      const total=base.slice(), plans=cars.map(()=>hours.map(()=>0));
+      const order=cars.map((car,i)=>({car,i})).sort((a,b)=>a.car.departure-b.car.departure || a.i-b.i);
+      for(const {car,i} of order) {
+        let remaining=car.energy;
+        const eligible=hours.map((t,k)=>k).filter(k=>hours[k]>=car.arrival && hours[k]<car.departure && (mode!=='midnight' || hours[k]>=24));
+        while(remaining>1e-8) {
+          const slots=eligible.filter(k=>plans[i][k]<7-1e-8 && (mode!=='coordinated' || total[k]<limit-1e-8));
+          if(!slots.length)break;
+          if(mode==='coordinated')slots.sort((a,b)=>illustrativeRate(hours[a])-illustrativeRate(hours[b]) || total[a]-total[b] || a-b);
+          const k=slots[0];
+          const power=Math.min(7-plans[i][k],remaining/DT,mode==='coordinated'?Math.max(0,limit-total[k]):Infinity);
+          plans[i][k]+=power;total[k]+=power;remaining-=power*DT;
+        }
+      }
+      const delivered=plans.map(plan=>sum(plan)*DT);
+      return { mode, total, plans, delivered, ready:cars.filter((car,i)=>delivered[i]>=car.energy-1e-6).length,
+        energy:sum(delivered), shortfall:sum(cars.map((car,i)=>Math.max(0,car.energy-delivered[i]))),
+        peak:Math.max(...total), overloadHours:total.filter(p=>p>limit+1e-6).length*DT,
+        cost:sum(plans.map(plan=>sum(plan.map((p,k)=>p*illustrativeRate(hours[k])))*DT)) };
+    }
+    return {homes,evCount,limit,base,cars,required:sum(cars.map(car=>car.energy)),results:{arrival:schedule('arrival'),midnight:schedule('midnight'),coordinated:schedule('coordinated')}};
+  }
   function simulate(options = {}) {
     const o = Object.assign({ homes: 120, participation: 70, reserve: 30, duration: 2, comfort: 1, scenario: 'evening', coordinated: true, target: 80, dispatch: 'all', onramp: 0 }, options);
     o.homes = Math.round(clamp(o.homes, 20, 400));
@@ -179,13 +272,18 @@
     };
   }
   function peakDay() {
+    // Invented daily shape: daytime use, evening peak, overnight low, morning rise.
+    const points = [[12, 300], [15, 310], [18.5, 470], [21, 310], [24, 230], [27, 200], [30, 260], [32, 350], [36, 300]];
     return hours.map(t => {
-      const demand = 250 + 220 * Math.exp(-Math.pow((t - 18.5) / 2, 2)) + 80 * Math.exp(-Math.pow((t - 31.5) / 1.7, 2));
+      const i = points.findIndex((p, index) => index < points.length - 1 && t >= p[0] && t < points[index + 1][0]);
+      const [a, b] = [points[i], points[i + 1]];
+      const blend = (1 - Math.cos(Math.PI * (t - a[0]) / (b[0] - a[0]))) / 2;
+      const demand = a[1] + (b[1] - a[1]) * blend;
       const otherSupply = 300;
       return { t, demand, otherSupply, otherUsed: Math.min(demand, otherSupply), peaker: Math.max(0, demand - otherSupply) };
     });
   }
-  const api = { DT, STEPS, hours, clamp, evPlan, renewable, simulate, peakDay };
+  const api = { DT, STEPS, hours, clamp, evPlan, renewable, illustrativeRate, householdShift, bestHouseholdSchedule, renewableAbundance, neighbourhoodCharging, simulate, peakDay };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.FlexModel = api;
 })(typeof window !== 'undefined' ? window : globalThis);

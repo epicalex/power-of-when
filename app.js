@@ -2,7 +2,7 @@
   'use strict';
   const M = window.FlexModel;
   const $ = id => document.getElementById(id);
-  const state = { weather: 'windy', scenario: 'evening', dispatch: 'follow', time: 24, playing: false };
+  const state = { chargingMode: 'arrival', weather: 'windy', scenario: 'evening', dispatch: 'follow', time: 24, playing: false };
   const time = t => {
     const minutes = Math.round(t * 60) % 1440;
     return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
@@ -10,6 +10,7 @@
   const value = id => Number($(id).value);
   const money = amount => new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(amount);
   const number = n => new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 }).format(n);
+  const hoursText = n => new Intl.NumberFormat('en-GB', { maximumFractionDigits: 2 }).format(n);
   const put = (id, text) => { $(id).textContent = text; };
   let fleet;
 
@@ -78,11 +79,10 @@
       <g fill="#819b73"><path d="M90 103L89 72Q89 63 93 61L97 94 95 104Z"/><path d="M90 103L89 72Q89 63 93 61L97 94 95 104Z" transform="rotate(120 92 104)"/><path d="M90 103L89 72Q89 63 93 61L97 94 95 104Z" transform="rotate(240 92 104)"/></g><circle cx="92" cy="104" r="4" fill="#6d8761"/>
       <path d="M470 161H505M480 172H520M70 219H96" stroke="#bdc9af" stroke-width="1"/>
       <path d="M145 459H171" stroke="#74936c" stroke-width="1.5" stroke-dasharray="4 4"/><text x="181" y="462" fill="#61765b" font-family="sans-serif" font-size="9">Control signals · not electrical wires</text>`;
-    $('car-illustration').innerHTML = `<svg viewBox="0 0 270 130"><path d="M10 111H258" stroke="#d6ddce"/><rect x="210" y="33" width="22" height="69" rx="3" fill="#d7e2ce" stroke="#839b75"/><rect x="215" y="40" width="12" height="16" rx="1" fill="#496d50"/><path d="M232 62C262 62 260 106 235 99L185 91" fill="none" stroke="#637f5a" stroke-width="2"/>${car(107, 84, 1.85)}<text x="218" y="83" text-anchor="middle" font-size="16" fill="#47734d">ϟ</text><path d="M24 55H47M17 64H38" stroke="#c8d3be" stroke-width="2"/></svg>`;
   }
-  function chartFrame(container, height = 220, max = 10, min = 0, event = null, ticks = null, domain = [12, 36]) {
-    const width = Math.max(280, container.clientWidth - (container.id === 'fleet-chart' ? 30 : container.id === 'ev-chart' ? 44 : 0));
-    const left = 43, right = width - 16, top = 28, bottom = height - 33;
+  function chartFrame(container, height = 220, max = 10, min = 0, event = null, ticks = null, domain = [12, 36], top = 28) {
+    const width = Math.max(280, container.clientWidth);
+    const left = 43, right = width - 16, bottom = height - 33;
     const x = t => left + (t - domain[0]) / (domain[1] - domain[0]) * (right - left);
     const y = p => bottom - (p - min) / (max - min) * (bottom - top);
     let grid = '';
@@ -91,7 +91,7 @@
       grid += `<line class="chart-grid" x1="${left}" x2="${right}" y1="${y(p)}" y2="${y(p)}"/><text class="chart-axis" x="${left - 9}" y="${y(p) + 3}" text-anchor="end">${number(p)}</text>`;
     }
     const tickStep = domain[1] - domain[0] <= 2 ? 0.5 : 1;
-    const timeTicks = domain[0] === 12 && domain[1] === 36 ? [12, 18, 24, 30, 36] : Array.from({ length: Math.floor((domain[1] - domain[0]) / tickStep) + 1 }, (_, i) => domain[0] + i * tickStep);
+    const timeTicks = domain[0] === 12 && domain[1] === 36 ? [12, 18, 24, 30, 36] : domain[0] === 6 && domain[1] === 24 ? [6, 12, 18, 24] : Array.from({ length: Math.floor((domain[1] - domain[0]) / tickStep) + 1 }, (_, i) => domain[0] + i * tickStep);
     if (timeTicks[timeTicks.length - 1] < domain[1]) timeTicks.push(domain[1]);
     timeTicks.forEach(t => {
       grid += `<text class="chart-axis" x="${x(t)}" y="${height - 10}" text-anchor="${t === domain[0] ? 'start' : t === domain[1] ? 'end' : 'middle'}">${time(t)}</text>`;
@@ -99,9 +99,9 @@
     const eventSvg = event ? `<rect x="${x(event[0])}" y="${top}" width="${x(event[1]) - x(event[0])}" height="${bottom - top}" fill="#eadcc4" opacity=".65"/><text x="${x(event[0]) + 5}" y="${top - 9}" class="chart-unit">EVENT</text>` : '';
     return { width, height, left, right, top, bottom, x, y, grid, eventSvg };
   }
-  function stepPath(values, x, y) {
-    let d = `M${x(12)},${y(values[0])}`;
-    values.forEach((p, i) => { if (i) d += `V${y(p)}`; d += `H${x(12 + (i + 1) * M.DT)}`; });
+  function stepPath(values, x, y, start = 12) {
+    let d = `M${x(start)},${y(values[0])}`;
+    values.forEach((p, i) => { if (i) d += `V${y(p)}`; d += `H${x(start + (i + 1) * M.DT)}`; });
     return d;
   }
   function chimney(x, y, height = 78) {
@@ -116,19 +116,21 @@
   }
   function renderPeak() {
     const rows = M.peakDay();
-    const row = rows[value('peak-time')];
-    const c = chartFrame($('peak-chart'), 255, 600, 0, null, [0, 120, 240, 360, 480, 600]);
-    const points = [];
-    rows.forEach(r => points.push([c.x(r.t), c.y(r.demand)], [c.x(r.t + M.DT), c.y(r.demand)]));
-    for (let i = rows.length - 1; i >= 0; i--) points.push([c.x(rows[i].t + M.DT), c.y(rows[i].otherUsed)], [c.x(rows[i].t), c.y(rows[i].otherUsed)]);
-    $('peak-chart').innerHTML = `<svg viewBox="0 0 ${c.width} ${c.height}" aria-hidden="true">${c.grid}<path d="M${points.map(p => p.join(',')).join('L')}Z" fill="#ce9275" opacity=".65"/><line x1="${c.left}" x2="${c.right}" y1="${c.y(300)}" y2="${c.y(300)}" stroke="#62815a" stroke-width="2" stroke-dasharray="5 4"/><text x="${c.right}" y="13" text-anchor="end" fill="#52734a" font-family="sans-serif" font-size="9">DASHED LINE · 300 MW</text><path d="${stepPath(rows.map(r => r.demand), c.x, c.y)}" class="chart-line" stroke="#253d34" stroke-width="2.2"/><line x1="${c.x(row.t)}" x2="${c.x(row.t)}" y1="${c.top}" y2="${c.bottom}" stroke="#ce7055"/><circle cx="${c.x(row.t)}" cy="${c.y(row.demand)}" r="4" fill="#253d34" stroke="#fcfbf7" stroke-width="2"/><text x="${c.left}" y="13" class="chart-unit">ILLUSTRATIVE · MW</text></svg>`;
-    $('peak-demand').innerHTML = `${number(row.demand)} <small>MW</small>`;
-    $('peak-output').innerHTML = `${number(row.peaker)} <small>MW</small>`;
-    put('peak-time-out', time(row.t));
+    const row = rows.reduce((peak,r)=>r.demand>peak.demand?r:peak,rows[0]);
+    const c = chartFrame($('peak-chart'), 290, 600, 0, null, [0, 120, 240, 360, 480, 600]);
+    // Monotone cubic interpolation passes through the model samples without overshooting peaks.
+    const samples = rows.concat({ t: 36, demand: rows[0].demand });
+    const slopes = samples.slice(1).map((r,i)=>(r.demand-samples[i].demand)/(r.t-samples[i].t));
+    const tangents = samples.map((r,i)=>i===0?slopes[0]:i===samples.length-1?slopes[i-1]:slopes[i-1]*slopes[i]<=0?0:2*slopes[i-1]*slopes[i]/(slopes[i-1]+slopes[i]));
+    let demandPath=`M${c.x(samples[0].t)},${c.y(samples[0].demand)}`;
+    for(let i=0;i<samples.length-1;i++) {
+      const a=samples[i], b=samples[i+1], third=(b.t-a.t)/3;
+      demandPath+=`C${c.x(a.t+third)},${c.y(a.demand+tangents[i]*third)} ${c.x(b.t-third)},${c.y(b.demand-tangents[i+1]*third)} ${c.x(b.t)},${c.y(b.demand)}`;
+    }
+    $('peak-chart').innerHTML = `<svg viewBox="0 0 ${c.width} ${c.height}" aria-hidden="true"><defs><clipPath id="peaker-gap-clip"><rect x="${c.left}" y="${c.top}" width="${c.right-c.left}" height="${c.y(300)-c.top}"/></clipPath></defs>${c.grid}<path d="${demandPath}L${c.right},${c.bottom}L${c.left},${c.bottom}Z" clip-path="url(#peaker-gap-clip)" fill="#ce9275" opacity=".65"/><line x1="${c.left}" x2="${c.right}" y1="${c.y(300)}" y2="${c.y(300)}" stroke="#62815a" stroke-width="2" stroke-dasharray="5 4"/><text x="${c.right}" y="13" text-anchor="end" fill="#52734a" font-family="sans-serif" font-size="9">WITHOUT THE PEAKER · 300 MW</text><path d="${demandPath}" class="chart-line" stroke="#253d34" stroke-width="2.2"/><circle cx="${c.x(row.t)}" cy="${c.y(row.demand)}" r="4" fill="#253d34" stroke="#fcfbf7" stroke-width="2"/><text x="${c.x(row.t)}" y="${c.y(row.demand)-13}" text-anchor="middle" fill="#253d34" font-family="sans-serif" font-size="11">${number(row.demand)} MW demand</text><text x="${c.left}" y="13" class="chart-unit">POWER · MW</text></svg>`;
+    put('peak-extra', `${number(row.peaker)} MW`);
     put('peak-hero-clock', time(row.t));
-    $('peak-time').setAttribute('aria-valuetext', time(row.t));
-    put('peak-observation', row.peaker > 0 ? `At ${time(row.t)}, demand is ${number(row.demand)} MW. With 300 MW of other supply available, the peaker supplies the extra ${number(row.peaker)} MW.` : `At ${time(row.t)}, demand is ${number(row.demand)} MW. Other supply can cover it, so no extra peaker output is needed in this example.`);
-    $('peak-chart').setAttribute('aria-label', `Illustrative demand and peaker output. At ${time(row.t)}, demand is ${number(row.demand)} megawatts, other supply available is 300 megawatts, and peaker output is ${number(row.peaker)} megawatts.`);
+    $('peak-chart').setAttribute('aria-label', `Demand and peaker output. At ${time(row.t)}, demand is ${number(row.demand)} megawatts, supply available without the peaker is up to 300 megawatts, and peaker output is ${number(row.peaker)} megawatts.`);
     const active = row.peaker > 0;
     const colour = active ? '#c58065' : '#a8b39e';
     $('peak-scene').innerHTML = `<defs><pattern id="peak-dots" width="17" height="17" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".65" fill="#9ead93" opacity=".35"/></pattern><marker id="power-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L8 4 0 8Z" fill="${colour}"/></marker></defs><rect width="600" height="470" fill="url(#peak-dots)"/><circle cx="456" cy="130" r="28" fill="#e4c9a1"/><path d="M50 310L264 184 557 348 340 459Z" fill="#dce3d2" stroke="#c2ceb5"/><path d="M230 304L389 214M277 331L468 320" fill="none" stroke="${colour}" stroke-width="3" marker-end="url(#power-arrow)"/>
@@ -137,34 +139,97 @@
   }
   function renderEV() {
     const departure = value('departure');
-    const latest = departure - 2;
+    const duration = value('charge-duration');
+    const latest = departure - duration;
     $('charge-start').max = latest;
     if (value('charge-start') > latest) $('charge-start').value = latest;
     const start = value('charge-start');
-    const ev = M.evPlan(start, departure);
     put('charge-start-out', time(start));
     put('departure-out', time(departure));
-    put('start-latest', `${time(latest)} · tomorrow`);
-    put('ev-window', `${time(start)}–${time(start + 2)}`);
-    $('ev-energy').innerHTML = `${number(ev.delivered)} <small>kWh</small>`;
+    put('start-latest', `${time(latest)} · ${latest >= 24 ? 'tomorrow' : 'today'}`);
+    put('charge-duration-out', `${hoursText(duration)} hours`);
+    put('charge-power', `${number(14 / duration)} kW × ${hoursText(duration)} hours`);
+    $('charge-duration').setAttribute('aria-valuetext', `${hoursText(duration)} hours at ${number(14 / duration)} kilowatts`);
+    put('ev-window', `${time(start)}–${time(start + duration)}`);
     $('charge-start').setAttribute('aria-valuetext', time(start));
     $('departure').setAttribute('aria-valuetext', `${time(departure)} tomorrow`);
-    $('ev-chart').setAttribute('aria-label', `Charging power across 24 hours. Charging from ${time(start)} to ${time(start + 2)} at 7 kilowatts supplies ${number(ev.delivered)} kilowatt-hours by departure at ${time(departure)}.`);
-    const c = chartFrame($('ev-chart'), 200, 8);
-    const base = M.evPlan(18, departure);
-    const actual = stepPath(ev.power, c.x, c.y);
-    $('ev-chart').innerHTML = `<svg viewBox="0 0 ${c.width} ${c.height}" aria-hidden="true">${c.grid}<text x="${c.left}" y="13" class="chart-unit">CHARGER POWER · kW</text><rect x="${c.x(18)}" y="${c.top}" width="${c.x(21) - c.x(18)}" height="${c.bottom - c.top}" fill="#e7d1bd" opacity=".35"/><path d="${stepPath(base.power, c.x, c.y)}" fill="none" stroke="#b2ada1" stroke-width="1.5" stroke-dasharray="4 4"/><path d="${actual}L${c.x(36)},${c.y(0)}L${c.x(12)},${c.y(0)}Z" fill="#b8cbae" opacity=".6"/><path d="${actual}" class="chart-line" stroke="#32664e" stroke-width="2"/><line x1="${c.x(departure)}" x2="${c.x(departure)}" y1="${c.top}" y2="${c.bottom}" stroke="#ce7055" stroke-dasharray="3 4"/><text x="${Math.min(c.width - 62, c.x(departure) + 5)}" y="${c.top - 7}" class="chart-unit">READY BY</text></svg>`;
-    const overlap = Math.max(0, Math.min(start + 2, 21) - Math.max(start, 18));
-    put('ev-observation', overlap > 0 ? `${number(overlap)} of the 2 charging hours ${overlap === 1 ? 'is' : 'are'} inside our illustrative 18:00–21:00 evening peak. Move the window later; the car still gets 14 kWh.` : `Charging moves out of the evening peak. The car still gets the same 14 kWh and is ready by ${time(departure)}.`);
-    renderSupply(ev);
+    renderHousehold();
   }
-  function renderSupply(ev) {
-    ev = ev || M.evPlan(value('charge-start'), value('departure'));
-    const demand = M.hours.map((t, i) => 0.4 + 0.7 * Math.exp(-Math.pow((t - 18.5) / 2, 2)) + ev.power[i]);
-    const generation = M.hours.map(t => M.renewable(t, state.weather) * 3);
-    const c = chartFrame($('supply-chart'), 235, 9);
-    const curve = (values) => values.map((v, i) => `${i ? 'L' : 'M'}${c.x(M.hours[i])},${c.y(v)}`).join(' ');
-    $('supply-chart').innerHTML = `<svg viewBox="0 0 ${c.width} ${c.height}" aria-hidden="true">${c.grid}<text x="${c.left}" y="13" class="chart-unit">POWER · kW</text><path d="${curve(generation)}L${c.x(35.75)},${c.y(0)}L${c.x(12)},${c.y(0)}Z" fill="#b4c7a8" opacity=".45"/><path d="${curve(generation)}" class="chart-line" stroke="#547b4c" stroke-width="2"/><path d="${stepPath(demand, c.x, c.y)}" class="chart-line" stroke="#ce7055" stroke-width="2"/></svg>`;
+  function renderHousehold() {
+    const start = value('charge-start'), departure = value('departure');
+    const result = M.householdShift(start, departure, state.weather, value('charge-duration')), rows = result.rows;
+    const descriptions = {
+      windy: 'Breezy day: wind continues after sunset, with some daytime solar.',
+      sunny: 'Sunny, light winds: most of the shown renewable electricity arrives in daylight.',
+      cloudy: 'Cloudy and breezy: limited solar, with wind throughout the day.',
+      still: 'Still and cloudy: little wind or solar. Moving charging alone cannot create more supply.',
+      overnight: 'Windy overnight: the strongest wind arrives after midnight.',
+      changeable: 'Changeable winds and sun: later is not automatically better; compare the curves.'
+    };
+    const c = chartFrame($('ev-chart'), 300, 10, 0, null, [0, 2, 4, 6, 8, 10], [12, 36], 62);
+    const tariffBands = [[12,16,'Standard','25p/kWh','#eeece6'],[16,21,'Peak','35p/kWh','#f2ddcc'],[21,24,'Standard','25p/kWh','#eeece6'],[24,30,'Off-peak','10p/kWh','#e0e5f4'],[30,36,'Standard','25p/kWh','#eeece6']].map(([a,b,name,label,fill]) => `<rect x="${c.x(a)}" y="23" width="${c.x(b)-c.x(a)}" height="20" fill="${fill}"/><text x="${(c.x(a)+c.x(b))/2}" y="14" text-anchor="middle" class="chart-unit">${name}</text><text x="${(c.x(a)+c.x(b))/2}" y="37" text-anchor="middle" class="chart-unit">${label}</text>`).join('');
+    const tariffLines = [16,21,24,30].map(t => `<line x1="${c.x(t)}" x2="${c.x(t)}" y1="23" y2="${c.bottom}" stroke="#877b99" stroke-width="1" stroke-dasharray="2 4"/><text x="${c.x(t)}" y="54" text-anchor="middle" class="chart-unit">${time(t)}</text>`).join('');
+    const home = rows.map(r => r.home), total = rows.map(r => r.total);
+    const band = [...rows.flatMap(r => [[c.x(r.t), c.y(r.total)], [c.x(r.t + M.DT), c.y(r.total)]]), ...rows.slice().reverse().flatMap(r => [[c.x(r.t + M.DT), c.y(r.home)], [c.x(r.t), c.y(r.home)]])];
+    const gap = [...rows.flatMap(r => [[c.x(r.t), c.y(r.total)], [c.x(r.t + M.DT), c.y(r.total)]]), ...rows.slice().reverse().flatMap(r => [[c.x(r.t + M.DT), c.y(Math.min(r.total, r.generation))], [c.x(r.t), c.y(Math.min(r.total, r.generation))]])];
+    $('ev-chart').innerHTML = `<svg viewBox="0 0 ${c.width} ${c.height}" aria-hidden="true"><defs><pattern id="renewable-gap-hatch" patternUnits="userSpaceOnUse" width="7" height="7"><path d="M-2 2L2-2M0 7L7 0M5 9L9 5" stroke="#b64d38" stroke-width="1.1" opacity=".7"/></pattern></defs>${c.grid}${tariffBands}<text x="${c.left+6}" y="${c.top+13}" class="chart-unit">kW</text><path d="${stepPath(home,c.x,c.y)}L${c.x(36)},${c.y(0)}L${c.x(12)},${c.y(0)}Z" fill="#c5ccbe" opacity=".65"/><path d="M${band.map(p=>p.join(',')).join('L')}Z" fill="#b7cfe9" opacity=".7"/><path d="M${gap.map(p=>p.join(',')).join('L')}Z" fill="#f0bda9" opacity=".6"/><path d="M${gap.map(p=>p.join(',')).join('L')}Z" fill="url(#renewable-gap-hatch)"/><path d="${stepPath(rows.map(r=>r.baseline),c.x,c.y)}" class="chart-line" stroke="#858585" stroke-width="1.6" stroke-dasharray="2 4"/><path d="${stepPath(total,c.x,c.y)}" class="chart-line" stroke="#2857a0" stroke-width="2.8"/><path d="${stepPath(rows.map(r=>r.generation),c.x,c.y)}" class="chart-line" stroke="#a56b08" stroke-width="2.8" stroke-dasharray="9 4"/>${tariffLines}<line x1="${c.x(departure)}" x2="${c.x(departure)}" y1="${c.top}" y2="${c.bottom}" stroke="#ce7055" stroke-dasharray="3 4"/><text x="${Math.min(c.width-62,c.x(departure)+5)}" y="${c.bottom-8}" class="chart-unit">READY BY</text></svg>`;
+    put('ev-charge-cost', money(result.chargingCost));
+    put('ev-original-cost', money(result.baselineChargingCost));
+    put('household-cost', money(result.householdCost));
+    put('household-original-cost', `Original schedule: ${money(result.baselineHouseholdCost)}`);
+    const costChange = result.baselineChargingCost - result.chargingCost;
+    put('ev-charge-saving', money(Math.abs(costChange)));
+    put('ev-saving-label', costChange < -.005 ? 'EXTRA EV CHARGING COST' : 'EV CHARGING SAVING');
+    put('ev-cost-change', Math.abs(costChange)<.005 ? 'No saving yet' : `${number(Math.abs(costChange)/result.baselineChargingCost*100)}% ${costChange>0?'saved':'more expensive'}`);
+    put('weather-description', descriptions[state.weather]);
+    put('home-peak', `${number(result.peak)} kW`);
+    put('home-peak-before', `Original 18:00 / 2-hour charge: ${number(result.baselinePeak)} kW`);
+    const savingPercent = costChange / result.baselineChargingCost * 100;
+    const costReached = savingPercent >= 30 - 1e-8;
+    const matchReached = result.renewableShare >= 90 - 1e-8;
+    put('ev-renewable-share', `${number(result.renewableShare)}%`);
+    put('ev-renewable-energy', `${number(result.renewableMatched)} of 14 kWh · after other household use`);
+    put('ev-renewable-original', `Original charge: ${number(result.baselineRenewableShare)}% matched`);
+    put('cost-goal-value', `${number(savingPercent)}% saved`);
+    put('renewable-goal-value', `${number(result.renewableShare)}% matched`);
+    put('cost-goal-label', `${costReached?'✓ ':''}Save at least 30%`);
+    put('renewable-goal-label', `${matchReached?'✓ ':''}Match at least 90%`);
+    $('cost-goal').classList.toggle('goal-reached',costReached);
+    $('renewable-goal').classList.toggle('goal-reached',matchReached);
+    $('cost-progress-fill').style.width=`${M.clamp(savingPercent,0,100)}%`;
+    $('renewable-progress-fill').style.width=`${M.clamp(result.renewableShare,0,100)}%`;
+    $('cost-progress').setAttribute('aria-valuenow',M.clamp(savingPercent,0,100));
+    $('renewable-progress').setAttribute('aria-valuenow',M.clamp(result.renewableShare,0,100));
+    $('ev-chart').setAttribute('aria-label', `Household demand with charging from ${time(start)} to ${time(result.end)} at ${number(result.power)} kilowatts. ${descriptions[state.weather]} Grey area is other household demand; pale blue adds EV charging. Solid blue line is total demand; dotted grey is the original 18:00 two-hour charge. Dashed amber is a wind and solar allocation. Hatched coral above the renewable curve is demand supplied by the rest of the system, not an outage. Peak demand ${number(result.peak)} kilowatts. ${number(result.renewableShare)} percent of the EV’s 14 kilowatt-hours matched to the shown renewables after other household use. Tariff boundaries at 16:00, 21:00, midnight and 06:00. EV charge costs ${money(result.chargingCost)} versus ${money(result.baselineChargingCost)} for the original. Fixed axis zero to ten kilowatts.`);
+  }
+  function renderNeighbourhoodCharging() {
+    const fleet=M.neighbourhoodCharging({homes:value('charging-homes'),evShare:value('charging-share'),limit:value('charging-limit')});
+    const selected=fleet.results[state.chargingMode];
+    const names={arrival:'Charge on arrival',midnight:'Everyone waits until midnight',coordinated:'Coordinate charging'};
+    put('charging-homes-out',fleet.homes);put('charging-share-out',`${value('charging-share')}% · ${fleet.evCount} EVs`);put('charging-limit-out',`${fleet.limit} kW`);
+    const c=chartFrame($('charging-neighbourhood-chart'),300,700,0,null,[0,140,280,420,560,700]);
+    const colours={arrival:'#8b8177',midnight:'#a56b08',coordinated:'#2857a0'};
+    const other=Object.entries(fleet.results).filter(([mode])=>mode!==state.chargingMode).map(([mode,r])=>`<path d="${stepPath(r.total,c.x,c.y)}" class="chart-line" stroke="${colours[mode]}" stroke-width="1.5" stroke-dasharray="4 5" opacity=".55"/>`).join('');
+    const overload=fleet.base.map((_,k)=>`<rect x="${c.x(M.hours[k])}" y="${c.y(Math.max(selected.total[k],fleet.limit))}" width="${c.x(M.hours[k]+M.DT)-c.x(M.hours[k])}" height="${Math.max(0,c.y(fleet.limit)-c.y(selected.total[k]))}" fill="#d88469" opacity=".45"/>`).join('');
+    $('charging-neighbourhood-chart').innerHTML=`<svg viewBox="0 0 ${c.width} ${c.height}" aria-hidden="true">${c.grid}<text x="${c.left}" y="13" class="chart-unit">NEIGHBOURHOOD DEMAND · kW / SAME SCALE FOR EVERY STRATEGY</text><rect x="${c.x(24)}" y="${c.top}" width="${c.x(30)-c.x(24)}" height="${c.bottom-c.top}" fill="#e0e5f4" opacity=".5"/><path d="${stepPath(fleet.base,c.x,c.y)}L${c.x(36)},${c.y(0)}L${c.x(12)},${c.y(0)}Z" fill="#c5ccbe" opacity=".6"/>${overload}${other}<path d="${stepPath(selected.total,c.x,c.y)}" class="chart-line" stroke="${colours[state.chargingMode]}" stroke-width="3"/><line x1="${c.left}" x2="${c.right}" y1="${c.y(fleet.limit)}" y2="${c.y(fleet.limit)}" stroke="#b34d39" stroke-width="2" stroke-dasharray="8 4"/><text x="${c.right}" y="${c.y(fleet.limit)-7}" text-anchor="end" fill="#b34d39" font-size="10" font-family="sans-serif">LOCAL LIMIT · ${fleet.limit} kW</text></svg>`;
+    put('charging-peak',`${number(selected.peak)} kW`);put('charging-cost',money(selected.cost));put('charging-ready',`${selected.ready} / ${fleet.evCount}`);
+    const delta=selected.cost-fleet.results.arrival.cost;
+    put('charging-cost-note',Math.abs(delta)<.005?'Same as charging on arrival':`${money(Math.abs(delta))} ${delta<0?'less':'more'} than arrival`);
+    put('charging-summary',`${names[state.chargingMode]}. ${selected.overloadHours>0?`${number(selected.overloadHours)} hours above the local limit.`:'Demand stays within the local limit.'} ${selected.shortfall>1e-6?`${number(selected.shortfall)} kWh of required charging could not be scheduled; ${fleet.evCount-selected.ready} cars miss their energy target. A lower cost here partly reflects undelivered energy.`:`All ${number(fleet.required)} kWh scheduled before each car’s departure.`}${selected.overloadHours>0?' Requested demand exceeds available network capacity.':''}${Math.max(...fleet.base)>fleet.limit?' Household use alone exceeds this limit at some times; charging coordination cannot remove that load.':''}`);
+    const display=fleet.cars.slice(0,8), x=t=>125+(t-12)/24*650;
+    $('charging-car-timelines').innerHTML=`<svg viewBox="0 0 800 ${display.length*29+44}" aria-hidden="true">${display.map((car,i)=>`<text x="5" y="${i*29+18}" font-family="sans-serif" font-size="11" fill="#657166">Car ${i+1} · ${number(car.energy)} kWh</text><rect x="${x(car.arrival)}" y="${i*29+6}" width="${x(car.departure)-x(car.arrival)}" height="16" fill="#e1e5dc"/>${selected.plans[i].map((p,k)=>p>0?`<rect x="${x(M.hours[k])}" y="${i*29+6}" width="${650*M.DT/24}" height="16" fill="${colours[state.chargingMode]}" opacity="${.3+.7*p/7}"/>`:'').join('')}`).join('')}${[12,18,24,30,36].map(t=>`<text x="${x(t)}" y="${display.length*29+24}" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#657166">${time(t)}</text>`).join('')}</svg>`;
+    $('charging-neighbourhood-chart').setAttribute('aria-label',`${names[state.chargingMode]}. ${fleet.homes} homes, ${fleet.evCount} cars. Peak ${number(selected.peak)} kilowatts against a ${fleet.limit} kilowatt limit. ${selected.ready} cars scheduled ready. Capacity exceeded for ${number(selected.overloadHours)} hours. EV scheduled-energy cost ${money(selected.cost)}. Fixed scale 0 to 700 kilowatts.`);
+    $('charging-car-timelines').setAttribute('aria-label','First eight cars: grey bars show arrival to departure availability; coloured segments show scheduled charging, with darker segments indicating higher power.');
+  }
+  function renderAbundance() {
+    const result=M.renewableAbundance(value('abundance-shift')),rows=result.rows;
+    const c=chartFrame($('abundance-chart'),280,200,0,null,[0,50,100,150,200],[6,24]);
+    const curve=values=>values.map((p,i)=>`${i?'L':'M'}${c.x(rows[i].t)},${c.y(p)}`).join(' ');
+    const unused=rows.flatMap(r=>[[c.x(r.t),c.y(r.generation)],[c.x(r.t+M.DT),c.y(r.generation)]]).concat(rows.slice().reverse().flatMap(r=>[[c.x(r.t+M.DT),c.y(r.used)],[c.x(r.t),c.y(r.used)]]));
+    $('abundance-chart').innerHTML=`<svg viewBox="0 0 ${c.width} ${c.height}" aria-hidden="true">${c.grid}<text x="${c.left}" y="13" class="chart-unit">POWER · kW</text><rect x="${c.x(12)}" y="${c.top}" width="${c.x(14)-c.x(12)}" height="${c.bottom-c.top}" fill="#e5eddf"/><path d="M${unused.map(p=>p.join(',')).join('L')}Z" fill="#edce84" opacity=".6"/><path d="${stepPath(rows.map(r=>r.baseline),c.x,c.y,6)}" class="chart-line" stroke="#858585" stroke-width="1.6" stroke-dasharray="2 4"/><path d="${curve(rows.map(r=>r.generation))}" class="chart-line" stroke="#a56b08" stroke-width="2.5" stroke-dasharray="9 4"/><path d="${stepPath(rows.map(r=>r.demand),c.x,c.y,6)}" class="chart-line" stroke="#2857a0" stroke-width="2.8"/></svg>`;
+    put('abundance-shift-out',`${result.movedCars} of 10 cars`);
+    put('abundance-used',`${number(result.extraUsed)} kWh`);put('abundance-unused',`${number(result.unused)} kWh`);put('abundance-peak',`${number(result.eveningPeak)} kW`);
+    $('abundance-chart').setAttribute('aria-label',`${result.movedCars} cars charge at lunchtime instead of 18:00. ${number(result.extraUsed)} extra kilowatt-hours of solar used. ${number(result.unused)} kilowatt-hours left unused. Evening peak ${number(result.eveningPeak)} kilowatts. All cars receive the same total 140 kilowatt-hours.`);
   }
   function renderDevices() {
     const reserve = value('reserve'), comfort = 20 - value('comfort');
@@ -340,16 +405,53 @@
       window.addEventListener('resize', close);
     });
   }
+  function bindChapterNavigation() {
+    const links=Array.from(document.querySelectorAll('[data-chapter]'));
+    const nav=$('chapter-links'), header=$('chapter-nav');
+    const chapters=links.map(link=>({link,section:$(link.dataset.chapter)}));
+    let current=null, pending=false;
+    function update() {
+      pending=false;
+      const boundary=header.getBoundingClientRect().height+48;
+      let active=null;
+      for(const chapter of chapters)if(chapter.section.getBoundingClientRect().top<=boundary)active=chapter.link;
+      if(active===current)return;
+      current=active;
+      links.forEach(link=>{
+        link.classList.toggle('is-active',link===active);
+        if(link===active)link.setAttribute('aria-current','location');
+        else link.removeAttribute('aria-current');
+      });
+      if(active) {
+        const item=active.getBoundingClientRect(),container=nav.getBoundingClientRect();
+        if(item.left<container.left || item.right>container.right)nav.scrollTo({left:nav.scrollLeft+item.left-container.left-(container.width-item.width)/2,behavior:'auto'});
+      }
+    }
+    function schedule() {if(!pending){pending=true;window.requestAnimationFrame(update);}}
+    window.addEventListener('scroll',schedule,{passive:true});
+    window.addEventListener('resize',schedule);
+    window.addEventListener('hashchange',schedule);
+    window.addEventListener('pageshow',schedule);
+    update();
+  }
   function bind() {
-    $('peak-time').addEventListener('input', renderPeak);
-    $('reset-peak').addEventListener('click', () => { $('peak-time').value = 26; renderPeak(); });
+    $('abundance-shift').addEventListener('input',renderAbundance);
+    ['charging-homes','charging-share','charging-limit'].forEach(id=>$(id).addEventListener('input',renderNeighbourhoodCharging));
+    document.querySelectorAll('[data-charging-mode]').forEach(button=>button.addEventListener('click',()=>{state.chargingMode=button.dataset.chargingMode;document.querySelectorAll('[data-charging-mode]').forEach(b=>{b.classList.toggle('active',b===button);b.setAttribute('aria-pressed',b===button);});renderNeighbourhoodCharging();}));
     document.querySelectorAll('[name="onramp"]').forEach(input => input.addEventListener('change', () => renderFleet()));
-    ['charge-start', 'departure'].forEach(id => $(id).addEventListener('input', renderEV));
-    $('reset-ev').addEventListener('click', () => { $('charge-start').value = 18; $('departure').value = 31; renderEV(); });
+    ['charge-start', 'departure', 'charge-duration'].forEach(id => $(id).addEventListener('input', renderEV));
+    $('reset-ev').addEventListener('click', () => { $('charge-duration').value = 2; $('departure').value = 31; $('charge-start').max = 29; $('charge-start').value = 18; state.weather = 'windy'; document.querySelectorAll('[data-weather]').forEach(b => { b.classList.toggle('active', b.dataset.weather === state.weather); b.setAttribute('aria-pressed', b.dataset.weather === state.weather); }); renderEV(); });
+    [['find-cheapest','cost'],['find-renewable','renewables']].forEach(([id,objective])=>$(id).addEventListener('click',()=>{
+      const best=M.bestHouseholdSchedule(value('departure'),state.weather,objective);
+      $('charge-duration').value=best.duration;
+      $('charge-start').max=value('departure')-best.duration;
+      $('charge-start').value=best.start;
+      renderEV();
+    }));
     document.querySelectorAll('[data-weather]').forEach(button => button.addEventListener('click', () => {
       state.weather = button.dataset.weather;
       document.querySelectorAll('[data-weather]').forEach(b => { b.classList.toggle('active', b === button); b.setAttribute('aria-pressed', b === button); });
-      renderSupply();
+      renderHousehold();
     }));
     ['reserve', 'comfort'].forEach(id => $(id).addEventListener('input', () => { renderDevices(); renderFleet(); }));
     ['homes', 'participation', 'duration', 'target'].forEach(id => $(id).addEventListener('input', () => renderFleet()));
@@ -402,7 +504,7 @@
     window.addEventListener('pageshow', () => {
       state.time = M.clamp(value('fleet-time'), 0, 95);
       selectDispatch(state.dispatch);
-      renderPeak(); renderEV(); renderDevices(); renderFleet();
+      renderPeak(); renderEV(); renderAbundance(); renderNeighbourhoodCharging(); renderDevices(); renderFleet();
     });
     document.addEventListener('visibilitychange', () => { if (document.hidden) stopPlayback(); });
     window.setInterval(() => {
@@ -413,14 +515,17 @@
       renderFleetChart(); renderResponseChart(); renderScene();
     }, 220);
     let resizeTimer;
-    window.addEventListener('resize', () => { window.clearTimeout(resizeTimer); resizeTimer = window.setTimeout(() => { renderPeak(); renderEV(); renderFleetChart(); renderResponseChart(); }, 100); });
+    window.addEventListener('resize', () => { window.clearTimeout(resizeTimer); resizeTimer = window.setTimeout(() => { renderPeak(); renderEV(); renderAbundance(); renderNeighbourhoodCharging(); renderFleetChart(); renderResponseChart(); }, 100); });
   }
   heroArt();
   renderPeak();
   selectDispatch('follow');
   renderEV();
   renderDevices();
+  renderAbundance();
+  renderNeighbourhoodCharging();
   renderFleet();
   bind();
   bindTooltips();
+  bindChapterNavigation();
 })();

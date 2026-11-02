@@ -14,29 +14,14 @@ python3 -m http.server 8000
 
 Then visit <http://localhost:8000>. Stop the server with Ctrl+C. This requires Python 3; opening the file directly does not.
 
-## Publish to GitHub Pages
+## Live site and GitHub sync
 
-1. Create a GitHub repository and upload the **contents of this folder** to its root. `index.html` must be at the publishing root.
-2. In the repository, go to **Settings → Pages**.
-3. Under **Build and deployment**, choose **Deploy from a branch**, select `main` and `/ (root)`, then save.
-4. GitHub will show the published address when deployment completes. For a project repository, it is normally `https://YOUR-USERNAME.github.io/YOUR-REPOSITORY/`.
+- Live site: https://epicalex.github.io/power-of-when/
+- Repository: https://github.com/epicalex/power-of-when
 
-The included `.nojekyll` file tells GitHub to serve these static files without Jekyll processing. If uploading via the browser, make sure to include this hidden file; this particular page also works without it.
-
-There is no automated deployment workflow to configure. A branch deployment is sufficient. GitHub Pages can be enabled separately after the repository is connected.
-
-## Sync with GitHub
+GitHub Pages publishes the root of `main`. Every push to `main` automatically updates the live site after GitHub's deployment completes. The included `.nojekyll` file serves the static files without Jekyll processing; no build or package install is needed.
 
 This folder is the Git repository and contains the website at its root. Generated previews and download archives live outside it.
-
-Once an empty GitHub repository has been created, connect it and upload the initial commit:
-
-```sh
-git remote add origin https://github.com/epicalex/power-of-when.git
-git push -u origin main
-```
-
-Use the actual repository URL if you choose a different name. Git will use your configured GitHub authentication.
 
 For subsequent changes, review and save a snapshot before uploading:
 
@@ -82,7 +67,7 @@ There is no runtime dependency on Node.js.
 
 ## What the model represents
 
-The journey begins with an illustrative peak-demand and peaker dispatch example, then introduces existing resources, household flexibility, the coordinated VPP, value and the proposed Huels test. The simulation runs from noon to noon at 15-minute resolution. Demand, weather, equipment ownership and rates are **illustrative assumptions**, not measured data or financial forecasts. The essay includes expandable notes explaining the model and linking to sources.
+The journey begins with an illustrative peak-demand and peaker dispatch example, then introduces household demand shifting, the Demand Flexibility Service, automation of existing resources, the coordinated VPP, value and the proposed Huels test. The simulation runs from noon to noon at 15-minute resolution. Demand, weather, equipment ownership and rates are **illustrative assumptions**, not measured data or financial forecasts. The essay includes expandable notes explaining the model and linking to sources.
 
 - EVs receive 14 kWh by 07:00 using a 7 kW charger. They do not export.
 - Home batteries have 10 kWh capacity, initially at 80%, user-selected reserve, 3 kW event power, 2 kW recovery power, and 95% charge/discharge efficiency each way. They recover their initial charge by the end of the day.
@@ -109,3 +94,43 @@ A separate historical panel cites Octopus Energy's [Saving Sessions analysis, 8 
 ## Huels test and maturity
 
 The final learning chapter introduces the Huels test and EnergyHub's proposed five-level VPP maturity model. It is presented as a proposed operational benchmark, not certification or an industry-wide scoring system. Matching a simulated request does not demonstrate that a real VPP has passed it: the model has no real telemetry, forecast uncertainty, year-round availability assessment or operational grid-system integration. Source links are provided in the chapter.
+
+## Demand shifting and DFS
+
+The seven-part journey introduces demand shifting with the EV experiment, then explains Great Britain’s Demand Flexibility Service before introducing device automation and VPP coordination. DFS is a service, while a VPP is a way to aggregate and coordinate resources; they can overlap. The DFS chapter separates historical winter 2022–23 evidence from the year-round service and its April 2026 expansion to demand turn-up. The 300 MW line in the opening chart is a fixed limit on supply available without the peaker, not constant actual generation.
+
+## Combined household charging experiment
+
+The demand-shifting experiment uses one shared 0–10 kW chart. Grey shows other household use, pale blue adds EV charging, the solid blue line shows total demand, and the dotted grey line preserves the original 18:00 two-hour charging schedule. The dashed amber line is a made-up allocation of wider wind and solar generation, not rooftop output alone. Six weather scenarios demonstrate that peak shaving and matching renewable availability are different objectives.
+
+Assume the car is available from noon until departure. The duration control spreads the same 14 kWh over 2–12 hours at constant power (14 / duration kW). All feasible schedules deliver 14 kWh; other household demand stays fixed. The start moves earlier when needed to fit the departure deadline. The demand-beyond-renewables metric integrates positive demand minus generation at 15-minute resolution, without banking unused renewable allocation. It is neither a bill nor an emissions calculation. Coral hatching marks demand above the renewable allocation, met by the rest of the system. Reset restores the original two-hour schedule and breezy weather. The gentle overnight example selects six hours from midnight in the overnight-wind scenario.
+
+## Illustrative charging tariff
+
+The combined household chart marks tariff boundaries at 16:00, 21:00, 00:00 and 06:00. The invented tariff is 10p/kWh from midnight to 06:00, 35p from 16:00 to 21:00 and 25p otherwise. Intervals include their start and exclude their end. EV and whole-house energy costs sum each 15-minute power interval times its rate. The fixed comparison is 14 kWh at 7 kW from 18:00–20:00 (£4.90). The six-hour midnight example costs £1.40 for the EV. Household energy totals cover noon to noon.
+
+Weather affects renewable overlap, not the fixed retail tariff. All consumption is billed: the renewable allocation is not free on-site generation. No standing charges, exports or charging losses are included. The three scheduling sliders share a row above 620px and stack on narrower screens.
+
+## Neighbourhood charging coordination
+
+A separate comparison opens the VPP chapter: charging on arrival, a shared midnight start, and coordinated charging. Controls set 20–80 homes, 25–100% EV ownership and an illustrative 30–200 kW local capacity limit. All strategies share deterministic cars with 16:00–20:00 arrivals, 05:00–09:00 departures, 7–17.5 kWh requirements and 7 kW chargers. The chart stays at 0–700 kW. The first eight cars have availability and charging timelines.
+
+The coordinated scheduler prioritises earlier departures, then allocates cheaper slots first and chooses less-loaded slots at equal prices, subject to each charger and available aggregate capacity. It is a simple greedy scheduling demonstration with perfect information, not a globally optimal controller or a power-flow model. Costs integrate the same illustrative time-of-use tariff. Household load is fixed; energy shortfalls and base-load capacity breaches are explicit. Unconstrained strategies show requested demand; scheduled readiness is not guaranteed physical delivery when demand exceeds capacity. This comparison is independent of the later grid-event simulation.
+
+## Experiment 2 layout
+
+The household experiment groups weather, tariff, legend and chart with the three scheduling sliders directly underneath. At widths of 700px and above, energy and cost metrics form one vertical results column on the right; narrower screens place results after the chart and controls. The redundant car illustration is removed. Longer explanations are available below the working area in an expandable note.
+
+Repeated editorial caveats and technical notes are consolidated in the closing “A note on the models” section, with the detailed assumptions retained in one expandable panel. Explanatory chart labels and state-dependent charging shortfalls remain beside the experiments.
+
+## Cost and renewable-match challenge
+
+Experiment 2 compares each schedule with the original 18:00 two-hour charge using two visible goals: lower charging cost and less total household demand beyond the shown renewable allocation. “Lowest cost” and “Closest renewable match” search all valid start times and constant-power durations on the 15-minute control grid, preserving the current departure time, weather and 14 kWh requirement. Ties are broken using the other objective. This renewable-overlap measure is not an emissions estimate. These objective buttons replace the earlier overnight preset.
+
+## Renewable matching percentage
+
+The household challenge now requires at least 30% EV cost saving against the 18:00 two-hour charge and at least 90% of the EV’s 14 kWh matched to the shown renewable allocation. These are teaching targets. Progress bars show the actual percentages. Matching assigns renewable power to other household use first, then counts min(EV charging, max(generation − other household use, 0)) in each 15-minute interval. Unused allocation is not carried into later intervals. This is a timing match to an illustrative allocation, not an attribution of real electricity or a carbon calculation.
+
+The opening peak-demand chart is now a static annotated example: 470 MW maximum demand, 300 MW available without the peaker, and a 170 MW gap. The former day slider and changing readouts are removed; a smooth curve preserves the model sample values.
+
+The DFS chapter now includes a solar-abundance demonstration over 06:00–24:00. Its slider moves ten 14 kWh EV charges from 18:00–20:00 to 12:00–14:00 while holding total charging energy at 140 kWh. It reports extra solar used, unused solar and evening peak demand; no DFS payment is simulated. The historical Octopus panel uses a navy and pink visual treatment. A vehicle-to-grid tooltip explains compatible bidirectional equipment while preserving one-way EV assumptions in the models.
