@@ -244,3 +244,6 @@ fieldset.onramp-control{min-width:0;border:0;border-top:1px solid var(--line);pa
 .peak-legend,.ev-primary-key,.abundance-legend,.charging-street-legend,.response-legend,.fleet-day-legend{display:flex;flex-wrap:nowrap;justify-content:flex-start;align-items:center;margin:8px 16px 20px 43px;padding:0 0 6px;gap:10px 18px;overflow-x:auto;scrollbar-width:thin}
 .peak-legend>span,.abundance-legend>span,.charging-street-legend>span,.response-legend>span,.fleet-day-legend>span{flex-shrink:0;white-space:nowrap}
 .response-legend>.label{margin-left:0}
+
+.work-in-progress{margin:0 0 24px;padding:12px 15px;border:1px solid var(--line);border-left:3px solid var(--coral);border-radius:3px;background:var(--panel);font-size:12px;line-height:1.65;color:var(--muted);max-width:520px}
+.work-in-progress strong{display:block;font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink);margin-bottom:3px}
